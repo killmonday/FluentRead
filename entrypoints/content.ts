@@ -10,6 +10,7 @@ import { cancelAllTranslations, translateText } from "@/entrypoints/utils/transl
 import { createApp } from 'vue';
 import TranslationStatus from '@/components/TranslationStatus.vue';
 import { mountNewApiComponent } from "@/entrypoints/utils/newApi";
+import { checkAndApplyDomainTranslation, updateDomainTranslationState, updateCurrentDomain } from "@/entrypoints/utils/domainTranslation";
 
 export default defineContentScript({
     matches: ['<all_urls>'],  // 匹配所有页面
@@ -17,6 +18,13 @@ export default defineContentScript({
     async main() {
         await configReady // 等待配置加载完成
         if (config.on === false) return; // 如果配置关闭，则不执行任何操作
+        
+        // 更新当前域名
+        updateCurrentDomain();
+        
+        // 检查是否需要在当前页面自动翻译（基于域名记忆功能）
+        checkAndApplyDomainTranslation();
+        
         // 添加手动翻译事件监听器
         setupManualTranslationTriggers();
         // 添加悬浮球快捷键事件监听器
@@ -29,8 +37,12 @@ export default defineContentScript({
                 isFullPageTranslating = !isFullPageTranslating;
                 if (isFullPageTranslating) {
                     autoTranslateEnglishPage();
+                    // 更新域名翻译状态
+                    updateDomainTranslationState(true);
                 } else {
                     restoreOriginalContent();
+                    // 更新域名翻译状态
+                    updateDomainTranslationState(false);
                 }
             }
         });
@@ -130,6 +142,58 @@ export default defineContentScript({
             unmountFloatingBall();
             // 移除划词翻译组件
             unmountSelectionTranslator();
+        });
+        
+        // 监听URL变化，处理单页应用中的路由变化
+        let currentUrl = window.location.href;
+        const urlCheckInterval = setInterval(() => {
+            if (window.location.href !== currentUrl) {
+                const previousDomain = getMainDomain(currentUrl);
+                const currentDomain = getMainDomain(window.location.href);
+                
+                // 如果域名发生变化，更新当前域名
+                if (previousDomain !== currentDomain) {
+                    updateCurrentDomain();
+                    // 检查新域名是否需要自动翻译
+                    checkAndApplyDomainTranslation();
+                }
+                
+                currentUrl = window.location.href;
+            }
+        }, 1000); // 每秒检查一次URL变化
+        
+        // 使用 History API 监听路由变化（对于使用 pushState 的 SPA）
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        
+        history.pushState = function(...args) {
+            const result = originalPushState.apply(this, args);
+            window.dispatchEvent(new Event('pushstate'));
+            window.dispatchEvent(new Event('locationchange'));
+            return result;
+        };
+        
+        history.replaceState = function(...args) {
+            const result = originalReplaceState.apply(this, args);
+            window.dispatchEvent(new Event('replacestate'));
+            window.dispatchEvent(new Event('locationchange'));
+            return result;
+        };
+        
+        window.addEventListener('popstate', () => {
+            window.dispatchEvent(new Event('locationchange'));
+        });
+        
+        window.addEventListener('locationchange', () => {
+            const currentDomain = getMainDomain(window.location.href);
+            const previousDomain = getMainDomain(document.referrer || window.location.href);
+            
+            // 如果域名发生变化，更新当前域名
+            if (previousDomain !== currentDomain) {
+                updateCurrentDomain();
+                // 检查新域名是否需要自动翻译
+                checkAndApplyDomainTranslation();
+            }
         });
     }
 })

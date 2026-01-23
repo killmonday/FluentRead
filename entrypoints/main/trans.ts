@@ -8,6 +8,7 @@ import { detectlang, throttle } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
 import { translateText, cancelAllTranslations } from '@/entrypoints/utils/translateApi';
+import { updateDomainTranslationState } from "@/entrypoints/utils/domainTranslation";
 
 let hoverTimer: any; // 鼠标悬停计时器
 let htmlSet = new Set(); // 防抖
@@ -72,6 +73,9 @@ export function restoreOriginalContent() {
     // 7. 消除可能存在的全局样式污染
     const tempStyleElements = document.querySelectorAll('style[data-fr-temp-style]');
     tempStyleElements.forEach(el => el.remove());
+    
+    // 更新域名翻译状态为未翻译
+    updateDomainTranslationState(false);
 }
 
 // 自动翻译整个页面的功能
@@ -96,6 +100,9 @@ export function autoTranslateEnglishPage() {
     if (!nodes.length) return;
 
     isAutoTranslating = true;
+    
+    // 更新域名翻译状态为已翻译
+    updateDomainTranslationState(true);
 
     // 创建观察器
     observer = new IntersectionObserver((entries, observer) => {

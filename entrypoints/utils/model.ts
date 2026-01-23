@@ -1,4 +1,5 @@
 import { defaultOption, services } from "./option";
+import { getMainDomain } from "../main/compat";
 
 interface IMapping {
     [key: string]: string;
@@ -54,6 +55,7 @@ export class Config {
     inputBoxTranslationTrigger: string; // 输入框翻译触发方式
     inputBoxTranslationTarget: string; // 输入框翻译目标语言
 
+
     constructor() {
         this.on = true;
         this.autoTranslate = false;
@@ -98,6 +100,7 @@ export class Config {
         this.translationStatus = true; // 默认启用翻译进度面板
         this.inputBoxTranslationTrigger = 'disabled'; // 默认关闭输入框翻译
         this.inputBoxTranslationTarget = 'en'; // 默认翻译成英文
+
     }
 }
 
