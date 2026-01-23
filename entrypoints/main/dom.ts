@@ -13,14 +13,18 @@ const directSet = new Set([
 const skipSet = new Set([
     'html', 'body', 'script', 'style', 'noscript', 'iframe',
     'input', 'textarea', 'select', 'button', 'code', 'pre',
+    'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param',
 ]);
 
-// 内联元素集合（可以包含在其他元素内的元素）
+// 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素会被翻译
 export const inlineSet = new Set([
     'a', 'b', 'strong', 'span', 'em', 'i', 'u', 'small', 'sub', 'sup',
     'font', 'mark', 'cite', 'q', 'abbr', 'time', 'ruby', 'bdi', 'bdo',
-    'img', 'br', 'wbr', 'svg'
+    'br', 'wbr'
 ]);
+
+
+
 
 // 传入父节点，返回所有需要翻译的 DOM 元素数组
 export function grabAllNode(rootNode: Node): Element[] {
@@ -47,9 +51,9 @@ export function grabAllNode(rootNode: Node): Element[] {
                 }
 
                 // 在初始全局翻译时 跳过header与footer
-                if (tag === 'header' || tag === 'footer') {
-                    return NodeFilter.FILTER_REJECT;
-                }
+                // if (tag === 'header' || tag === 'footer') {
+                //     return NodeFilter.FILTER_REJECT;
+                // }
 
                 // 检查是否只包含有效文本内容
                 let hasText = false;
