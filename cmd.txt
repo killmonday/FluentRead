@@ -1,3 +1,8 @@
 npm config set registry https://registry.npmmirror.com
 npm install wxt
 npx wxt build
+
+
+git remote -v
+git remote set-url origin https://github.com/killmonday/FluentRead
+git remote add upstream https://github.com/Bistutu/FluentRead

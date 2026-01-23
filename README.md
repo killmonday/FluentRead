@@ -1,3 +1,7 @@
+# 修改
+- 修复翻译后图片损坏问题
+- 新增“保存同域名下的页面的翻译状态记录”功能，在同域名下访问子页面，能够自动接着翻译，除非用户关闭了翻译。
+
 # 流畅阅读 (FluentRead)
 
 > [English](https://github.com/Bistutu/FluentRead/blob/main/misc/README_EN.md) | 中文
