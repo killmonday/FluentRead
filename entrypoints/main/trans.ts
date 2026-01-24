@@ -3,7 +3,7 @@ import { cache } from "../utils/cache";
 import { options, servicesType } from "../utils/option";
 import { insertFailedTip, insertLoadingSpinner } from "../utils/icon";
 import { styles } from "@/entrypoints/utils/constant";
-import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle } from "@/entrypoints/main/dom";
+import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML } from "@/entrypoints/main/dom";
 import { detectlang, throttle } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
@@ -33,7 +33,9 @@ export function restoreOriginalContent() {
         const nodeId = node.getAttribute(TRANSLATED_ID_ATTR);
         if (nodeId && originalContents.has(nodeId)) {
             const originalContent = originalContents.get(nodeId);
-            node.innerHTML = originalContent;
+            // 安全清理原始HTML，防止XSS攻击
+            const sanitizedContent = sanitizeHTML(originalContent);
+            node.innerHTML = sanitizedContent;
             node.removeAttribute(TRANSLATED_ATTR);
             node.removeAttribute(TRANSLATED_ID_ATTR);
             
@@ -245,10 +247,13 @@ export function handleSingleTranslation(node: any, slide: boolean) {
             spinner.remove();
             htmlSet.delete(nodeOuterHTML);
 
+            // 安全清理缓存的HTML，防止XSS攻击
+            const sanitizedCache = sanitizeHTML(outerHTMLCache);
+            
             // 兼容部分网站独特的 DOM 结构
             let fn = replaceCompatFn[getMainDomain(document.location.hostname)];
-            if (fn) fn(node, outerHTMLCache);
-            else node.outerHTML = outerHTMLCache;
+            if (fn) fn(node, sanitizedCache);
+            else node.outerHTML = sanitizedCache;
 
         }, 250);
         return;

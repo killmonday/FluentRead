@@ -13,7 +13,7 @@ const directSet = new Set([
 const skipSet = new Set([
     'html', 'body', 'script', 'style', 'noscript', 'iframe',
     'input', 'textarea', 'select', 'button', 'code', 'pre',
-    'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param',
+    'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'
 ]);
 
 // 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素会被翻译
@@ -51,9 +51,9 @@ export function grabAllNode(rootNode: Node): Element[] {
                 }
 
                 // 在初始全局翻译时 跳过header与footer
-                // if (tag === 'header' || tag === 'footer') {
-                //     return NodeFilter.FILTER_REJECT;
-                // }
+                if (tag === 'header' || tag === 'footer') {
+                    return NodeFilter.FILTER_REJECT;
+                }
 
                 // 检查是否只包含有效文本内容
                 let hasText = false;
@@ -420,8 +420,10 @@ export function LLMStandardHTML(node: any) {
 export function beautyHTML(text: string): string {
     // 1. 先替换 SVG 中的大小写敏感词
     // 2. 再使用 js-beautify 格式化 HTML
+    // 3. 安全清理HTML，防止XSS攻击
     text = replaceSensitiveWords(text);
-    return html(text)
+    const formatted = html(text);
+    return sanitizeHTML(formatted);
 }
 
 // 替换 svg 标签中的一些大小写敏感的词（html 不区分大小写，但 svg 标签区分大小写）
@@ -465,4 +467,123 @@ export function smashTruncationStyle(node: any) {
     checkAndRemoveStyle(node, 'webkitLineClamp');
     node.style.webkitLineClamp = 'unset';
     node.style.maxHeight = 'unset';
+}
+
+// 安全清理HTML，防止XSS攻击
+export function sanitizeHTML(html: string): string {
+    // 使用DOMParser解析HTML，然后提取安全的内容
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    
+    // 遍历所有元素，移除危险的标签和属性
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT);
+    const elementsToRemove: Element[] = [];
+    const allowedTags = new Set([
+        // 内联元素集合
+        'a', 'b', 'strong', 'span', 'em', 'i', 'u', 'small', 'sub', 'sup',
+        'font', 'mark', 'cite', 'q', 'abbr', 'time', 'ruby', 'bdi', 'bdo',
+        'br', 'wbr',
+        // 块级元素
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'dd', 'blockquote', 'figcaption',
+        // 其他安全元素
+        'div', 'code', 'pre', 'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'
+    ]);
+    // 危险属性黑名单，下面进行移除
+    const dangerousAttributes = new Set([
+        'onclick', 'onload', 'onerror', 'onmouseover', 'onmouseout', 'onkeydown', 'onkeypress', 'onkeyup',
+        'onfocus', 'onblur', 'onchange', 'onsubmit', 'onreset', 'onselect', 'onabort', 'oncanplay',
+        'oncanplaythrough', 'oncuechange', 'ondurationchange', 'onemptied', 'onended', 'oninput',
+        'oninvalid', 'onpause', 'onplay', 'onplaying', 'onprogress', 'onratechange', 'onseeked',
+        'onseeking', 'onstalled', 'onsuspend', 'ontimeupdate', 'onvolumechange', 'onwaiting',
+        'oncopy', 'oncut', 'onpaste', 'onwheel', 'onscroll', 'onresize', 'ontoggle'
+    ]);
+    
+    let currentNode: Node | null;
+    while (currentNode = walker.nextNode()) {
+        const element = currentNode as Element;
+        const tagName = element.tagName.toLowerCase();
+        
+        // 移除不在白名单中的标签
+        if (!allowedTags.has(tagName)) {
+            elementsToRemove.push(element);
+            continue;
+        }
+        
+        // 移除危险属性
+        for (const attr of Array.from(element.attributes)) {
+            const attrName = attr.name.toLowerCase();
+            if (dangerousAttributes.has(attrName) || attrName.startsWith('on')) {
+                element.removeAttribute(attr.name);
+                continue;
+            }
+            
+            // 检查style属性中的危险内容
+            if (attrName === 'style') {
+                const styleValue = attr.value.toLowerCase();
+                if (styleValue.includes('expression') || 
+                    styleValue.includes('javascript:') || 
+                    styleValue.includes('data:') ||
+                    styleValue.includes('@import') ||
+                    styleValue.includes('behavior')) {
+                    element.removeAttribute(attr.name);
+                }
+            }
+            
+            // 检查data属性中的危险内容
+            if (attrName.startsWith('data-')) {
+                const dataValue = attr.value.toLowerCase();
+                if (dataValue.includes('javascript:') || dataValue.includes('<script')) {
+                    element.removeAttribute(attr.name);
+                }
+            }
+        }
+        
+        // 对href和src属性进行安全检查
+        const href = element.getAttribute('href');
+        const src = element.getAttribute('src');
+        if (href) {
+            const hrefLower = href.toLowerCase();
+            if (hrefLower.startsWith('javascript:') || 
+                hrefLower.startsWith('data:') ||
+                hrefLower.startsWith('vbscript:') ||
+                hrefLower.includes('<script')) {
+                element.removeAttribute('href');
+            }
+        }
+        if (src) {
+            const srcLower = src.toLowerCase();
+            if (srcLower.startsWith('javascript:') || 
+                srcLower.startsWith('data:') ||
+                srcLower.startsWith('vbscript:') ||
+                srcLower.includes('<script')) {
+                element.removeAttribute('src');
+            }
+        }
+        
+        // 对embed、object、param等特殊标签进行额外检查
+        if (tagName === 'embed' || tagName === 'object' || tagName === 'param') {
+            // 移除这些标签的type属性，防止恶意MIME类型
+            element.removeAttribute('type');
+            // 确保codebase属性安全
+            const codebase = element.getAttribute('codebase');
+            if (codebase && codebase.toLowerCase().startsWith('javascript:')) {
+                element.removeAttribute('codebase');
+            }
+        }
+    }
+    
+    // 移除危险元素
+    elementsToRemove.forEach(element => {
+        // 移除元素，但保留其文本内容
+        const parent = element.parentNode;
+        if (parent) {
+            while (element.firstChild) {
+                parent.insertBefore(element.firstChild, element);
+            }
+            parent.removeChild(element);
+        }
+    });
+    
+    // 返回清理后的HTML
+    return doc.body.innerHTML;
 }
