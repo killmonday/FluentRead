@@ -11,6 +11,7 @@ import { createApp } from 'vue';
 import TranslationStatus from '@/components/TranslationStatus.vue';
 import { mountNewApiComponent } from "@/entrypoints/utils/newApi";
 import { checkAndApplyDomainTranslation, updateDomainTranslationState, updateCurrentDomain } from "@/entrypoints/utils/domainTranslation";
+import { getMainDomain } from "./main/compat";
 
 export default defineContentScript({
     matches: ['<all_urls>'],  // 匹配所有页面
