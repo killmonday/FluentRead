@@ -264,7 +264,7 @@ export function handleSingleTranslation(node: any, slide: boolean) {
     singleTranslate(node);
 }
 
-
+// 执行双语翻译
 function bilingualTranslate(node: any, nodeOuterHTML: any) {
     if (detectlang(node.textContent.replace(/[\s\u3000]/g, '')) === config.to) return;
 
@@ -330,7 +330,9 @@ export function singleTranslate(node: any) {
         })
         .catch((error: Error) => {
             spinner.remove();
-            insertFailedTip(node, error.toString() || "翻译失败", spinner);
+            if (node.tagName.toLowerCase() !== 'a'){
+                insertFailedTip(node, error.toString() || "翻译失败", spinner);
+            }
         });
 }
 

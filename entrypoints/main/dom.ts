@@ -16,9 +16,9 @@ const skipSet = new Set([
     'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'
 ]);
 
-// 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素使用html
+// 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素使用html。另外还决定是否查找父节点
 export const inlineSet = new Set([
-    'a', 'b', 'strong', 'span', 'em', 'i', 'u', 'small', 'sub', 'sup',
+    'a', 'b', 'strong', 'em', 'i', 'u', 'small', 'sub', 'sup',
     'font', 'mark', 'cite', 'q', 'abbr', 'time', 'ruby', 'bdi', 'bdo',
     'br', 'wbr'
 ]);
@@ -51,9 +51,9 @@ export function grabAllNode(rootNode: Node): Element[] {
                 }
 
                 // 在初始全局翻译时 跳过header与footer
-                if (tag === 'header' || tag === 'footer') {
-                    return NodeFilter.FILTER_REJECT;
-                }
+                // if (tag === 'header' || tag === 'footer') {
+                //     return NodeFilter.FILTER_REJECT;
+                // }
 
                 // 检查是否只包含有效文本内容
                 let hasText = false;
@@ -120,18 +120,27 @@ export function grabNode(node: any): any {
         }
         return false;
     }
-
     if (!node.tagName) return false;
-
-    // 如果是<a>标签，并且有可见文本内容
-    if (node.tagName.toLowerCase() === 'a' && node.textContent?.trim()) {
-        return node;
-    }
 
     const curTag = node.tagName.toLowerCase();
 
     // 1. 快速过滤：跳过不需要翻译的节点
     if (shouldSkipNode(node, curTag)) return false;
+
+    // 如果是<a>标签，并且有可见文本内容
+    if ((curTag === 'a') && node.textContent?.trim()) {
+        const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
+        if (domainHandler) {
+            const result = domainHandler(node);
+            // 如果返回的是对象且包含skip属性为true，则跳过该节点
+            if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
+                return false;
+            }
+        }
+        return node;
+    }
+
+
 
     // 2. 特殊适配一些站点：根据域名进行特殊处理
     const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
