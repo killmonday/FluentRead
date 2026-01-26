@@ -127,6 +127,7 @@ export function autoTranslateEnglishPage() {
 
                 if (config.display === styles.bilingualTranslation) {
                     // 双语对照模式
+                    // console.log(" 双语对照模式", node );
                     handleBilingualTranslation(node, false);
                 } else {
                     // 仅译文模式

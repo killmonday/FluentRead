@@ -18,7 +18,7 @@ const skipSet = new Set([
 
 // 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素使用html。另外还决定是否查找父节点
 export const inlineSet = new Set([
-    'a', 'b', 'strong', 'em', 'i', 'u', 'small', 'sub', 'sup',
+    'a', 'b', 'span', 'strong', 'em', 'i', 'u', 'small', 'sub', 'sup',
     'font', 'mark', 'cite', 'q', 'abbr', 'time', 'ruby', 'bdi', 'bdo',
     'br', 'wbr'
 ]);
@@ -114,6 +114,8 @@ export function grabNode(node: any): any {
 
     // 对于 Text 节点，尝试找到其可翻译的父节点
     if (node instanceof Text) {
+        if (checkTextSize(node) || isMainlyNumericContent(node)) return false;
+        // console.log('Text节点', node);
         const parentOrSelf = findTranslatableParent(node);
         if (parentOrSelf && parentOrSelf !== node) {
             return parentOrSelf;
@@ -135,6 +137,10 @@ export function grabNode(node: any): any {
             // 如果返回的是对象且包含skip属性为true，则跳过该节点
             if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
                 return false;
+            }
+            // 如果返回值为节点或其他真值，则返回该值作为翻译节点
+            if (result) {
+                return result;
             }
         }
         return node;
@@ -163,9 +169,11 @@ export function grabNode(node: any): any {
         return false;
     }
 
-    // 5. 内联元素处理：向上查找合适的父节点
+    // 5. isInlineElement()函数判断是否内联元素/纯文本/还有子节点
+    //node.tagName.toLowerCase() !== 'span' && 
     if (isInlineElement(node, curTag)) {
-        return findTranslatableParent(node);
+        // console.log(node, " 是内联元素/纯文本/有子节点");
+        return findTranslatableParent(node); // 向上查找合适的父节点
     }
 
     // 6. 首行文本处理：处理 div 和 label 的首行文本
@@ -372,7 +380,7 @@ function isInlineElement(node: any, tag: string): boolean {
 function findTranslatableParent(node: any): any {
     // 1. 递归调用 grabNode 查找父节点是否可翻译
     // 2. 若父节点不可翻译，则返回当前节点
-
+    // console.log('当前父节点', node.parentNode);
     const parentResult = grabNode(node.parentNode);
     return parentResult || node;
 }
