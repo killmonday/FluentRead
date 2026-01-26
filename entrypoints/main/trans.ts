@@ -126,8 +126,10 @@ export function autoTranslateEnglishPage() {
                 node.setAttribute(TRANSLATED_ATTR, 'true');
 
                 if (config.display === styles.bilingualTranslation) {
+                    // 双语对照模式
                     handleBilingualTranslation(node, false);
                 } else {
+                    // 仅译文模式
                     handleSingleTranslation(node, false);
                 }
 
@@ -171,7 +173,7 @@ export function autoTranslateEnglishPage() {
 }
 
 // 处理鼠标悬停翻译的主函数
-export function handleTranslation(mouseX: number, mouseY: number, delayTime: number = 0) {
+export function handleMousePointTranslation(mouseX: number, mouseY: number, delayTime: number = 0) {
     // 检查配置
     if (!checkConfig()) return;
 
@@ -234,7 +236,7 @@ export function handleBilingualTranslation(node: any, slide: boolean) {
     bilingualTranslate(node, nodeOuterHTML);
 }
 
-// 单语翻译
+// 仅译文翻译
 export function handleSingleTranslation(node: any, slide: boolean) {
     let nodeOuterHTML = node.outerHTML;
     let outerHTMLCache = cache.localGet(node.outerHTML);
@@ -282,13 +284,27 @@ function bilingualTranslate(node: any, nodeOuterHTML: any) {
         });
 }
 
-
+// 进行仅译文模式下的翻译
 export function singleTranslate(node: any) {
+    if (!node.textContent.trim().replace(/[\s\u3000]/g, '')) return;
     if (detectlang(node.textContent.replace(/[\s\u3000]/g, '')) === config.to) return;
-
-    let origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
+    let origin = "";
+    // let origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
+    
+    // own: 如果origin是<a>且有可见文本，则仅仅提取可见文本进行翻译，再把译文替换到原来的位置
+    // console.log(node.tagName.toLowerCase());
+    if (node.tagName.toLowerCase() === 'a') {
+        // 获取a标签里的可见文本
+        let visibleText = node.textContent.trim().replace(/[\s\u3000]/g, '');
+        if (!visibleText) return;
+        origin = visibleText;
+    }else{
+        origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
+    }
+    
     let spinner = insertLoadingSpinner(node);
     
+
     // 使用队列管理的翻译API
     translateText(origin, document.title)
         .then((text: string) => {
@@ -298,8 +314,13 @@ export function singleTranslate(node: any) {
             
             if (!text || origin === text) return;
             
+
             let oldOuterHtml = node.outerHTML;
-            node.innerHTML = text;
+            if (node.tagName.toLowerCase() === 'a'){
+                node.textContent = text;
+            }else{
+                node.innerHTML = text;
+            }
             let newOuterHtml = node.outerHTML;
             
             // 缓存翻译结果

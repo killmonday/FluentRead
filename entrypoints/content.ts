@@ -1,4 +1,4 @@
-import { handleTranslation, autoTranslateEnglishPage, restoreOriginalContent } from "./main/trans";
+import { handleMousePointTranslation, autoTranslateEnglishPage, restoreOriginalContent } from "./main/trans";
 import { cache } from "./utils/cache";
 import { constants } from "@/entrypoints/utils/constant";
 import { getCenterPoint } from "@/entrypoints/utils/common";
@@ -365,7 +365,7 @@ function setupManualTranslationTriggers() {
         if (screen.hotkeyPressed && mouseHotkeysPressed.size === 0 && !screen.otherKeyPressed && !screen.hasSlideTranslation) {
             // 检查插件是否开启
             if (config.on) {
-                handleTranslation(screen.mouseX, screen.mouseY);
+                handleMousePointTranslation(screen.mouseX, screen.mouseY);
             }
         }
         
@@ -383,7 +383,7 @@ function setupManualTranslationTriggers() {
         screen.mouseY = event.clientY;
         if (screen.hotkeyPressed && config.on) {
             screen.hasSlideTranslation = true;
-            handleTranslation(screen.mouseX, screen.mouseY, 50)
+            handleMousePointTranslation(screen.mouseX, screen.mouseY, 50)
         }
     });
 
@@ -406,7 +406,7 @@ function setupManualTranslationTriggers() {
 
         // 检查插件是否开启
         if (config.on) {
-            handleTranslation(coordinate!.x, coordinate!.y);
+            handleMousePointTranslation(coordinate!.x, coordinate!.y);
         }
     });
 
@@ -417,7 +417,7 @@ function setupManualTranslationTriggers() {
             let mouseX = event.clientX;
             let mouseY = event.clientY;
             // 调用 handleTranslation 函数进行翻译
-            handleTranslation(mouseX, mouseY);
+            handleMousePointTranslation(mouseX, mouseY);
         }
     });
 
@@ -434,7 +434,7 @@ function setupManualTranslationTriggers() {
                 if (config.on) {
                     let mouseX = event.clientX;
                     let mouseY = event.clientY;
-                    handleTranslation(mouseX, mouseY);
+                    handleMousePointTranslation(mouseX, mouseY);
                 }
             }, 500) as unknown as number;
         }
@@ -460,7 +460,7 @@ function setupManualTranslationTriggers() {
             if (event.button === 1) {
                 let mouseX = event.clientX;
                 let mouseY = event.clientY;
-                handleTranslation(mouseX, mouseY);
+                handleMousePointTranslation(mouseX, mouseY);
             }
         }
     });
@@ -487,7 +487,7 @@ function setupManualTranslationTriggers() {
             clearTimeout(touchTimer);
             touchCount = 0;
             if (config.on) {
-                handleTranslation(event.touches[0].clientX, event.touches[0].clientY);
+                handleMousePointTranslation(event.touches[0].clientX, event.touches[0].clientY);
             }
         }
     });

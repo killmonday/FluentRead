@@ -16,7 +16,7 @@ const skipSet = new Set([
     'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'
 ]);
 
-// 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素会被翻译
+// 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素使用html
 export const inlineSet = new Set([
     'a', 'b', 'strong', 'span', 'em', 'i', 'u', 'small', 'sub', 'sup',
     'font', 'mark', 'cite', 'q', 'abbr', 'time', 'ruby', 'bdi', 'bdo',
@@ -37,7 +37,7 @@ export function grabAllNode(rootNode: Node): Element[] {
         NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
         {
             acceptNode: (node: Node): number => {
-                if (node instanceof Text) return NodeFilter.FILTER_ACCEPT;
+                if (node instanceof Text && node.textContent?.trim()) return NodeFilter.FILTER_ACCEPT;
 
                 if (!(node instanceof Element)) return NodeFilter.FILTER_SKIP;
 
@@ -97,6 +97,7 @@ export function grabAllNode(rootNode: Node): Element[] {
     while (currentNode = walker.nextNode()) {
         const translateNode = grabNode(currentNode as Element | Text);
         if (translateNode) {
+            // 推送到需要翻译的队列
             result.push(translateNode);
             // 跳过已确定要翻译的节点的所有子节点
             walker.currentNode = currentNode.nextSibling || currentNode;
@@ -110,6 +111,7 @@ export function grabNode(node: any): any {
     // 空节点检查
     if (!node) return false;
 
+
     // 对于 Text 节点，尝试找到其可翻译的父节点
     if (node instanceof Text) {
         const parentOrSelf = findTranslatableParent(node);
@@ -121,12 +123,17 @@ export function grabNode(node: any): any {
 
     if (!node.tagName) return false;
 
+    // 如果是<a>标签，并且有可见文本内容
+    if (node.tagName.toLowerCase() === 'a' && node.textContent?.trim()) {
+        return node;
+    }
+
     const curTag = node.tagName.toLowerCase();
 
     // 1. 快速过滤：跳过不需要翻译的节点
     if (shouldSkipNode(node, curTag)) return false;
 
-    // 2. 特殊适配：根据域名进行特殊处理
+    // 2. 特殊适配一些站点：根据域名进行特殊处理
     const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
     if (domainHandler) {
         const result = domainHandler(node);
@@ -356,6 +363,7 @@ function isInlineElement(node: any, tag: string): boolean {
 function findTranslatableParent(node: any): any {
     // 1. 递归调用 grabNode 查找父节点是否可翻译
     // 2. 若父节点不可翻译，则返回当前节点
+
     const parentResult = grabNode(node.parentNode);
     return parentResult || node;
 }
