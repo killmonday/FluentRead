@@ -1636,6 +1636,7 @@ function shouldSkipYouTubeElement(node: any): boolean {
         'div.ytd-structured-description-content-renderer', // 结构化描述内容
         'ytd-info-panel-content-renderer', // 信息面板内容
         'ytd-info-panel-container-renderer', // 信息面板容器
+        'ytd-watch-metadata', //视频简介。错乱比较多，不翻译了
         
         // 缩略图和推荐视频信息
         'span.ytd-thumbnail-overlay-time-status-renderer', // 视频时长
@@ -1663,6 +1664,9 @@ function shouldSkipYouTubeElement(node: any): boolean {
         'ytd-playlist-panel-renderer div#play-button', // 播放列表播放按钮
         'ytd-playlist-panel-renderer a.ytd-playlist-panel-video-renderer', // 播放列表视频链接
         'ytd-playlist-byline-renderer', // 播放列表署名
+
+        //
+        'ytd-watch-metadata',
     ];
     
     // 检查当前节点是否匹配跳过选择器
@@ -1674,7 +1678,7 @@ function shouldSkipYouTubeElement(node: any): boolean {
     }
     
     // 检查节点的类名是否包含特定关键字
-    const skipClassKeywords = ['ytp-', 'button', 'badge', 'menu', 'selector', 'icon', 'thumbnail', 'avatar'];
+    const skipClassKeywords = ['ytp-', 'button', 'badge', 'menu', 'selector', 'icon', 'thumbnail', 'avatar', 'watch-active-metadata'];
     
     if (node.className && typeof node.className === 'string') {
         for (const keyword of skipClassKeywords) {
