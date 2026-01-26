@@ -357,7 +357,8 @@ export const selectCompatFn: SelectCompatFn = {
         // 评论内容
         const comment = findMatchingElement(node, 'div.comment-body td.comment-body');
         if (comment) return comment;
-        
+
+
         // 然后翻译次要但仍然重要的内容
         
         // 问题（Issue）标题
@@ -717,7 +718,7 @@ function shouldSkipGitHubElement(node: any): boolean {
         'enhancement', 'frontend', 'backend', 'api', 'ui', 'ux', 'refactor', 'test',
         'needs tests', 'ready for work', 'wip', 'top priority', 'low priority', 'medium priority',
         'high priority', 'work in progress', 'needs investigation', 'feature request',
-        'discussion', 'breaking change', 'needs triage'
+        'discussion', 'breaking change', 'needs triage', 'tab-container', 'g-emoji'
     ];
     
     // GitHub状态文本
@@ -948,6 +949,14 @@ function shouldSkipGitHubElement(node: any): boolean {
         'span.color-fg-success', // 成功颜色（通常用于open/accepted状态）
         'span.color-fg-muted', // 暗淡颜色（通常用于辅助信息）
         'span.color-fg-done', // 完成颜色
+        'form.js-issue-sidebar-form', // Issue侧边栏表单
+        'span.css-truncate',
+        'p.d-flex',
+        'span.mr-1',
+        'path',
+        'hovercard-link-click',
+        'span.css-overflow-wrap-anywhere.width-fit.v-align-middle',
+        'g-emoji', 'Truncate-text', 'Link--onHover', 'Link--muted'
     ];
 
     // 检查当前节点是否匹配跳过选择器
@@ -964,7 +973,8 @@ function shouldSkipGitHubElement(node: any): boolean {
         'branch', 'commits', 'issues', 'pull', 'directory', 'filename', 
         'Counter', 'topic-tag', 'social-count', 'State', 'Label', 'UnderlineNav',
         'IssueLabel', 'issue-keyword', 'issue-label', 'label-link', 'color-label',
-        'js-issue-labels', 'issue-meta', 'bg-',  'color-text-'
+        'js-issue-labels', 'issue-meta', 'bg-',  'color-text-', 
+        'Link--secondary', 'd-inline-flex', 'css-truncate', 'protip', 'flex-md-self-center', 'color-border-muted', 'Button-label', 'PinnedIssue', 'mb-2', 'ActivityHeader', 'row-module', 'markdownLastEditedby', 'SectionFilterLink', 'ActionList', 'ActionList-content', 'bg-discussions-row-emoji-box', 'prc-Link-Link'
     ];
     
     if (node.className && typeof node.className === 'string') {
