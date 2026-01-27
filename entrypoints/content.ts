@@ -1,4 +1,4 @@
-import { handleMousePointTranslation, autoTranslateEnglishPage, restoreOriginalContent } from "./main/trans";
+import { handleMousePointTranslation, autoTranslateEnglishPage, restoreOriginalContent, resetTranslationState } from "./main/trans";
 import { cache } from "./utils/cache";
 import { constants } from "@/entrypoints/utils/constant";
 import { getCenterPoint } from "@/entrypoints/utils/common";
@@ -149,15 +149,18 @@ export default defineContentScript({
         let currentUrl = window.location.href;
         const urlCheckInterval = setInterval(() => {
             if (window.location.href !== currentUrl) {
+                // 重置翻译状态，因为页面内容已变化
+                resetTranslationState();
+                
                 const previousDomain = getMainDomain(currentUrl);
                 const currentDomain = getMainDomain(window.location.href);
                 
                 // 如果域名发生变化，更新当前域名
                 if (previousDomain !== currentDomain) {
                     updateCurrentDomain();
-                    // 检查新域名是否需要自动翻译
-                    checkAndApplyDomainTranslation();
                 }
+                // 检查是否需要自动翻译（无论域名是否变化，因为页面内容已刷新）
+                checkAndApplyDomainTranslation();
                 
                 currentUrl = window.location.href;
             }
@@ -186,15 +189,18 @@ export default defineContentScript({
         });
         
         window.addEventListener('locationchange', () => {
+            // 重置翻译状态，因为页面内容已变化
+            resetTranslationState();
+            
             const currentDomain = getMainDomain(window.location.href);
             const previousDomain = getMainDomain(document.referrer || window.location.href);
             
             // 如果域名发生变化，更新当前域名
             if (previousDomain !== currentDomain) {
                 updateCurrentDomain();
-                // 检查新域名是否需要自动翻译
-                checkAndApplyDomainTranslation();
             }
+            // 检查是否需要自动翻译（无论域名是否变化，因为页面内容已刷新）
+            checkAndApplyDomainTranslation();
         });
     }
 })

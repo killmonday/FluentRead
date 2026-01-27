@@ -1,11 +1,11 @@
 import { checkConfig, searchClassName, skipNode } from "../utils/check";
 import { cache } from "../utils/cache";
-import { options, servicesType } from "../utils/option";
+import { options, servicesType, services } from "../utils/option";
 import { insertFailedTip, insertLoadingSpinner } from "../utils/icon";
 import { styles } from "@/entrypoints/utils/constant";
-import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML } from "@/entrypoints/main/dom";
+import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML, checkTextSize, isMainlyNumericContent, shouldSkipNode, findTranslatableParent } from "@/entrypoints/main/dom";
 import { detectlang, throttle } from "@/entrypoints/utils/common";
-import { getMainDomain, replaceCompatFn } from "@/entrypoints/main/compat";
+import { getMainDomain, replaceCompatFn, selectCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
 import { translateText, cancelAllTranslations } from '@/entrypoints/utils/translateApi';
 import { updateDomainTranslationState } from "@/entrypoints/utils/domainTranslation";
@@ -84,6 +84,13 @@ export function restoreOriginalContent() {
 export function autoTranslateEnglishPage() {
     // 如果已经在翻译中，则返回
     if (isAutoTranslating) return;
+    
+    // 如果是 Chrome 内置AI翻译，使用专用逻辑
+    // if (config.service === services.chromeTranslator) {
+    if (true) {
+        chromeTranslatorTranslatePage();
+        return;
+    }
     
     // 获取当前页面的语言（暂时注释，存在识别问题）
     // const text = document.documentElement.innerText || '';
@@ -294,14 +301,21 @@ export function singleTranslate(node: any) {
     
     // own: 如果origin是<a>且有可见文本，则仅仅提取可见文本进行翻译，再把译文替换到原来的位置
     // console.log(node.tagName.toLowerCase());
-    if (node.tagName.toLowerCase() === 'a') {
-        // 获取a标签里的可见文本
-        let visibleText = node.textContent.trim().replace(/[\s\u3000]/g, '');
-        if (!visibleText) return;
-        origin = visibleText;
+    // if (node.tagName.toLowerCase() === 'a') {
+    //     // 获取a标签里的可见文本
+    //     let visibleText = node.textContent.trim().replace(/[\s\u3000]/g, '');
+    //     if (!visibleText) return;
+    //     origin = visibleText;
+    // }else{
+    //     origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
+    // }
+
+    if (config.service === services.chromeTranslator) {
+        origin = node.textContent.trim().replace(/[\s\u3000]/g, '');
     }else{
         origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
     }
+
     
     let spinner = insertLoadingSpinner(node);
     
@@ -310,10 +324,12 @@ export function singleTranslate(node: any) {
     translateText(origin, document.title)
         .then((text: string) => {
             spinner.remove();
-            
-            text = beautyHTML(text);
-            
-            if (!text || origin === text) return;
+            if (config.service === services.chromeTranslator){
+
+            }else{
+                text = beautyHTML(text);
+                if (!text || origin === text) return;
+            }
             
 
             let oldOuterHtml = node.outerHTML;
@@ -367,4 +383,154 @@ function bilingualAppendChild(node: any, text: string) {
     newNode.append(text);
     smashTruncationStyle(node);
     node.appendChild(newNode);
+}
+
+// Chrome 内置AI翻译专用逻辑 提取文本而非html
+function chromeTranslatorTranslatePage() {
+    if (isAutoTranslating) return;
+    isAutoTranslating = true;
+    updateDomainTranslationState(true);
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    const translatedNodes = new Set();
+
+    while (walker.nextNode()) {
+        const textNode = walker.currentNode as Text;
+        if (!textNode.textContent || !textNode.textContent.trim()) continue;
+        // console.log(textNode.textContent);
+
+        // 检查文本长度和数字内容
+        if (shouldSkipNode(textNode, textNode.parentElement?.tagName.toLowerCase()??'')) {
+            // console.log('[skip]:', textNode.textContent);
+            continue;
+        }
+
+        // 跳过已翻译的文本节点
+        if (translatedNodes.has(textNode)) continue;
+        
+        const parentOrSelf = findTranslatableParent(textNode);
+
+
+        // 2. 特殊适配一些站点：根据域名进行特殊处理
+        const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
+        if (domainHandler) {
+            // console.log('parentOrSelf:', parentOrSelf);
+            try{
+                const result = domainHandler((parentOrSelf && parentOrSelf !== textNode) ? parentOrSelf : textNode);
+                // 如果返回的是对象且包含skip属性为true，则跳过该节点
+                if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
+                    // console.log('[特殊适配skip]:', textNode.textContent);
+                    continue
+                }
+            }catch(error){
+                
+            }
+
+        }
+
+
+        // 获取父元素
+        let targetElement = textNode.parentElement;
+        if (!targetElement) {
+            if(parentOrSelf){
+                targetElement = parentOrSelf;
+            }else{
+                // console.log('[没有父元素skip]:', textNode.textContent);
+                continue;
+            }
+        }
+        if (!targetElement) {
+            // console.log('[没有父元素skip22]:', textNode.textContent);
+            continue;
+        }
+        // 检查是否已翻译
+        // if (targetElement.hasAttribute(TRANSLATED_ATTR)) {
+        //     console.log('[已翻译skip]:', textNode.textContent);
+        //     continue
+        // };
+
+        // 检查父元素是否应该跳过
+        if (targetElement.classList?.contains('notranslate') || targetElement.isContentEditable){
+            // console.log('[notranslate skip]:', textNode.textContent);
+            continue;
+        } 
+        
+        
+        // 标记为已翻译
+        translatedNodes.add(textNode);
+        const nodeId = `fr-node-${nodeIdCounter++}`;
+        targetElement.setAttribute(TRANSLATED_ID_ATTR, nodeId);
+        
+        // 保存原始内容 - 对于TextNode，我们需要保存父元素的innerHTML
+        originalContents.set(nodeId, targetElement.innerHTML);
+        targetElement.setAttribute(TRANSLATED_ATTR, 'true');
+        
+        // 获取文本内容进行翻译
+        const textContent = textNode.textContent.trim();
+        if (!textContent) continue;
+        
+        // 检查目标语言是否与当前文本语言相同
+        if (detectlang(textContent) === config.to) {
+            // console.log('[same lang skip]:', textNode.textContent);
+            continue
+        };
+        
+        // 根据显示模式进行翻译
+        if (config.display === styles.bilingualTranslation) {
+            // 双语模式
+            const spinner = insertLoadingSpinner(targetElement);
+            translateText(textContent, document.title)
+                .then((translatedText: string) => {
+                    spinner.remove();
+                    bilingualAppendChild(targetElement, translatedText);
+                })
+                .catch((error: Error) => {
+                    spinner.remove();
+                    // console.log('[translate error]:', textNode.textContent, error.toString() || "翻译失败");
+                    insertFailedTip(targetElement, error.toString() || "翻译失败", spinner);
+                });
+        } else {
+            // 仅译文模式
+            const spinner = insertLoadingSpinner(targetElement);
+            translateText(textContent, document.title)
+                .then((translatedText: string) => {
+                    spinner.remove();
+                    // 直接替换TextNode的文本内容
+                    textNode.textContent = translatedText;
+                })
+                .catch((error: Error) => {
+                    spinner.remove();
+                    if (targetElement.tagName.toLowerCase() !== 'a' && targetElement.tagName.toLowerCase() !== 'span'){
+                        insertFailedTip(targetElement, error.toString() || "翻译失败", spinner);
+                    }
+                });
+        }
+    }
+}
+
+export function resetTranslationState(): void {
+    // 取消所有等待中的翻译任务
+    cancelAllTranslations();
+    
+    // 停止所有观察器
+    if (observer) {
+        observer.disconnect();
+        observer = null;
+    }
+    if (mutationObserver) {
+        mutationObserver.disconnect();
+        mutationObserver = null;
+    }
+    
+    // 重置所有翻译相关的状态
+    isAutoTranslating = false;
+    htmlSet.clear(); // 清空防抖集合
+    originalContents.clear(); // 清空原始内容存储
+    nodeIdCounter = 0; // 重置节点ID计数器
+    
+    // 移除可能存在的全局样式污染
+    const tempStyleElements = document.querySelectorAll('style[data-fr-temp-style]');
+    tempStyleElements.forEach(el => el.remove());
+    
+    // 注意：不更新域名翻译状态，因为域名翻译状态应保持不变
 }

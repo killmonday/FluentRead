@@ -1,6 +1,8 @@
 import { getMainDomain, selectCompatFn } from "@/entrypoints/main/compat";
 import { html } from 'js-beautify';
 import { handleBtnTranslation } from "@/entrypoints/main/trans";
+import { config } from "../utils/config";
+import { services } from "../utils/option";
 
 // 直接翻译的标签集合（块级元素）
 const directSet = new Set([
@@ -185,7 +187,7 @@ export function grabNode(node: any): any {
 }
 
 // 检查是否应该跳过节点
-function shouldSkipNode(node: any, tag: string): boolean {
+export function shouldSkipNode(node: any, tag: string): boolean {
     // 1. 判断标签是否在 skipSet 内
     // 2. 检查是否具有 notranslate 类
     // 3. 判断节点是否可编辑
@@ -199,17 +201,25 @@ function shouldSkipNode(node: any, tag: string): boolean {
 }
 
 // 检查文本长度
-function checkTextSize(node: any): boolean {
-    // 1. 若文本内容长度超过 3072
+export function checkTextSize(node: any): boolean {
+    // 1. 若文本内容长度超过 4000
     // 2. 或者 outerHTML 长度超过 4096，都视为过长
-    // 3. 少于3个字符
-    return node.textContent.length > 3072 ||
-        (node.outerHTML && node.outerHTML.length > 4096) ||
-        node.textContent.length < 3;
+    // 3. 少于4个字符
+    
+    // 如果是chrome内置ai翻译，长度限制为8000
+    if (config.service === services.chromeTranslator) {
+        return node.textContent.length > 9000 ||
+            (node.outerHTML && node.outerHTML.length > 10000) ||
+            node.textContent.length < 4;
+    }else{
+        return node.textContent.length > 4000 ||
+            (node.outerHTML && node.outerHTML.length > 4096) ||
+            node.textContent.length < 4;
+    }
 }
 
 // 检查节点内容是否主要为数字
-function isMainlyNumericContent(node: any): boolean {
+export function isMainlyNumericContent(node: any): boolean {
     if (!node || !node.textContent) return false;
     
     const text = node.textContent.trim();
@@ -377,7 +387,7 @@ function isInlineElement(node: any, tag: string): boolean {
 }
 
 // 查找可翻译的父节点
-function findTranslatableParent(node: any): any {
+export function findTranslatableParent(node: any): any {
     // 1. 递归调用 grabNode 查找父节点是否可翻译
     // 2. 若父节点不可翻译，则返回当前节点
     // console.log('当前父节点', node.parentNode);
