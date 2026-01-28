@@ -3,7 +3,7 @@ import { cache } from "../utils/cache";
 import { options, servicesType, services } from "../utils/option";
 import { insertFailedTip, insertLoadingSpinner } from "../utils/icon";
 import { styles } from "@/entrypoints/utils/constant";
-import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML, checkTextSize, isMainlyNumericContent, shouldSkipNode, findTranslatableParent } from "@/entrypoints/main/dom";
+import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML, checkTextSize, isMainlyNumericContent, shouldSkipNode, findTranslatableParent, skipSet } from "@/entrypoints/main/dom";
 import { detectlang, throttle } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn, selectCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
@@ -333,11 +333,7 @@ export function singleTranslate(node: any) {
             
 
             let oldOuterHtml = node.outerHTML;
-            if (node.tagName.toLowerCase() === 'a'){
-                node.textContent = text;
-            }else{
-                node.innerHTML = text;
-            }
+            node.textContent = text;
             let newOuterHtml = node.outerHTML;
             
             // 缓存翻译结果
@@ -399,73 +395,24 @@ function chromeTranslatorTranslatePage() {
         if (!textNode.textContent || !textNode.textContent.trim()) continue;
         // console.log(textNode.textContent);
 
-        // 检查文本长度和数字内容
-        if (shouldSkipNode(textNode, textNode.parentElement?.tagName.toLowerCase()??'')) {
-            // console.log('[skip]:', textNode.textContent);
-            continue;
-        }
-
         // 跳过已翻译的文本节点
         if (translatedNodes.has(textNode)) continue;
+        // 没有父节点的跳过
+        if (!textNode.parentElement) continue
         
-        const parentOrSelf = findTranslatableParent(textNode);
-
-
-        // 2. 特殊适配一些站点：根据域名进行特殊处理
-        const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
-        if (domainHandler) {
-            // console.log('parentOrSelf:', parentOrSelf);
-            try{
-                const result = domainHandler((parentOrSelf && parentOrSelf !== textNode) ? parentOrSelf : textNode);
-                // 如果返回的是对象且包含skip属性为true，则跳过该节点
-                if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
-                    // console.log('[特殊适配skip]:', textNode.textContent);
-                    continue
-                }
-            }catch(error){
-                
-            }
-
-        }
-
-
-        // 获取父元素
-        let targetElement = textNode.parentElement;
-        if (!targetElement) {
-            if(parentOrSelf){
-                targetElement = parentOrSelf;
-            }else{
-                // console.log('[没有父元素skip]:', textNode.textContent);
-                continue;
-            }
-        }
-        if (!targetElement) {
-            // console.log('[没有父元素skip22]:', textNode.textContent);
-            continue;
-        }
-        // 检查是否已翻译
-        // if (targetElement.hasAttribute(TRANSLATED_ATTR)) {
-        //     console.log('[已翻译skip]:', textNode.textContent);
-        //     continue
-        // };
+        let currentFatherNode = textNode.parentElement
 
         // 检查父元素是否应该跳过
-        if (targetElement.classList?.contains('notranslate') || targetElement.isContentEditable){
-            // console.log('[notranslate skip]:', textNode.textContent);
+        if (currentFatherNode.classList?.contains('notranslate') || currentFatherNode.isContentEditable || skipSet.has(currentFatherNode.tagName?.toLowerCase()??'')){
+            // console.log('[父节点属性skip]:', textNode.textContent);
             continue;
         } 
-        
-        
-        // 标记为已翻译
-        translatedNodes.add(textNode);
-        const nodeId = `fr-node-${nodeIdCounter++}`;
-        targetElement.setAttribute(TRANSLATED_ID_ATTR, nodeId);
-        
-        // 保存原始内容 - 对于TextNode，我们需要保存父元素的innerHTML
-        originalContents.set(nodeId, targetElement.innerHTML);
-        targetElement.setAttribute(TRANSLATED_ATTR, 'true');
-        
-        // 获取文本内容进行翻译
+        if (currentFatherNode.hasAttribute(TRANSLATED_ATTR)) {
+            // console.log('[已翻译skip]:', textNode.textContent);
+            continue
+        };
+
+        // 获取当前节点的文本内容
         const textContent = textNode.textContent.trim();
         if (!textContent) continue;
         
@@ -474,24 +421,68 @@ function chromeTranslatorTranslatePage() {
             // console.log('[same lang skip]:', textNode.textContent);
             continue
         };
+
+        //检查当前文本节点是否满足限制的长度和需要翻译，例如从组成几乎都是数字可以不翻译
+        if (checkTextSize(textNode) || isMainlyNumericContent(textNode)) continue;
+
+        // 找到允许翻译的父节点，获取后使用原先的逻辑来判断某些特殊网站（自定义的适配网站如youtube）里的一些元素是否需要翻译
+        var selfNodeOrCanTranslated = findTranslatableParent(textNode);
+        if (!selfNodeOrCanTranslated) { // 如果找不到允许翻译的父节点
+            selfNodeOrCanTranslated = textNode
+        }else{
+            const fatherOfCanTran = selfNodeOrCanTranslated.parentElement
+            const tagOfFatherCanTran = fatherOfCanTran?.tagName?.toLowerCase() ?? null
+            if (fatherOfCanTran && (fatherOfCanTran.classList?.contains('notranslate') || fatherOfCanTran.isContentEditable)){
+                continue;
+            }
+            if(tagOfFatherCanTran && skipSet.has(tagOfFatherCanTran)){
+                continue;
+            }
+        }
+
+        // 特殊适配一些站点：根据域名进行特殊处理
+        var elementNode = (selfNodeOrCanTranslated.nodeType === Node.TEXT_NODE) ? textNode.parentElement : selfNodeOrCanTranslated
+        const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
+        if (domainHandler) {
+            // console.log('击中特殊适配，elementNode:', elementNode);
+            try{
+                const result = domainHandler(elementNode);
+                // 如果返回的是对象且包含skip属性为true，则跳过该节点
+                if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
+                    // console.log('[特殊适配skip]:', textNode.textContent);
+                    continue
+                }
+            }catch(error){
+            }
+        }
+
+        // 标记为已翻译
+        translatedNodes.add(textNode);
+        const nodeId = `fr-node-${nodeIdCounter++}`;
+        currentFatherNode.setAttribute(TRANSLATED_ID_ATTR, nodeId);
+        
+        // 保存原始内容 - 对于TextNode，我们需要保存父元素的innerHTML
+        originalContents.set(nodeId, currentFatherNode.innerHTML);
+        currentFatherNode.setAttribute(TRANSLATED_ATTR, 'true');
+
         
         // 根据显示模式进行翻译
         if (config.display === styles.bilingualTranslation) {
             // 双语模式
-            const spinner = insertLoadingSpinner(targetElement);
+            const spinner = insertLoadingSpinner(currentFatherNode);
             translateText(textContent, document.title)
                 .then((translatedText: string) => {
                     spinner.remove();
-                    bilingualAppendChild(targetElement, translatedText);
+                    bilingualAppendChild(currentFatherNode, translatedText);
                 })
                 .catch((error: Error) => {
                     spinner.remove();
                     // console.log('[translate error]:', textNode.textContent, error.toString() || "翻译失败");
-                    insertFailedTip(targetElement, error.toString() || "翻译失败", spinner);
+                    insertFailedTip(currentFatherNode, error.toString() || "翻译失败", spinner);
                 });
         } else {
             // 仅译文模式
-            const spinner = insertLoadingSpinner(targetElement);
+            const spinner = insertLoadingSpinner(currentFatherNode);
             translateText(textContent, document.title)
                 .then((translatedText: string) => {
                     spinner.remove();
@@ -500,8 +491,8 @@ function chromeTranslatorTranslatePage() {
                 })
                 .catch((error: Error) => {
                     spinner.remove();
-                    if (targetElement.tagName.toLowerCase() !== 'a' && targetElement.tagName.toLowerCase() !== 'span'){
-                        insertFailedTip(targetElement, error.toString() || "翻译失败", spinner);
+                    if (currentFatherNode.tagName.toLowerCase() !== 'a' && currentFatherNode.tagName.toLowerCase() !== 'span' && textNode.textContent.length > 9){
+                        insertFailedTip(currentFatherNode, error.toString() || "翻译失败", spinner);
                     }
                 });
         }

@@ -988,8 +988,8 @@ function shouldSkipGitHubElement(node: any): boolean {
     
     // 检查特定属性
     const skipAttributes = [
-        'data-hovercard-type', 'data-issue-and-pr-hovercards-enabled',
-        'data-issue-title', 'data-url', 'data-pjax', 'data-hotkey', 'data-target', 
+        'data-issue-and-pr-hovercards-enabled', //'data-hovercard-type', 'data-target',
+        'data-issue-title', 'data-url', 'data-pjax', 'data-hotkey',  
         'data-filter-value', 'data-direction', 'data-state'
     ];
     

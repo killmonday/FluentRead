@@ -12,10 +12,10 @@ const directSet = new Set([
 ]);
 
 // 需要跳过的标签
-const skipSet = new Set([
+export const skipSet = new Set([
     'html', 'body', 'script', 'style', 'noscript', 'iframe',
     'input', 'textarea', 'select', 'button', 'code', 'pre',
-    'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'
+    'img', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param', 'cite', 
 ]);
 
 // 内联元素集合（可以包含在其他元素内的元素）。在仅显示译文模式下，这些标签的元素使用html。另外还决定是否查找父节点
@@ -116,7 +116,6 @@ export function grabNode(node: any): any {
 
     // 对于 Text 节点，尝试找到其可翻译的父节点
     if (node instanceof Text) {
-        if (checkTextSize(node) || isMainlyNumericContent(node)) return false;
         // console.log('Text节点', node);
         const parentOrSelf = findTranslatableParent(node);
         if (parentOrSelf && parentOrSelf !== node) {
@@ -131,31 +130,13 @@ export function grabNode(node: any): any {
     // 1. 快速过滤：跳过不需要翻译的节点
     if (shouldSkipNode(node, curTag)) return false;
 
-    // 如果是<a>标签，并且有可见文本内容
-    if ((curTag === 'a') && node.textContent?.trim()) {
-        const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
-        if (domainHandler) {
-            const result = domainHandler(node);
-            // 如果返回的是对象且包含skip属性为true，则跳过该节点
-            if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
-                return false;
-            }
-            // 如果返回值为节点或其他真值，则返回该值作为翻译节点
-            if (result) {
-                return result;
-            }
-        }
-        return node;
-    }
-
-
-
     // 2. 特殊适配一些站点：根据域名进行特殊处理
     const domainHandler = selectCompatFn[getMainDomain(location.href.split('?')[0])];
     if (domainHandler) {
         const result = domainHandler(node);
         // 如果返回的是对象且包含skip属性为true，则跳过该节点
         if (result && typeof result === 'object' && 'skip' in result && result.skip === true) {
+            // console.log("特殊网站适配，忽略：", node, ' ||  ', result)
             return false;
         }
         // 如果返回值为节点或其他真值，则返回该值作为翻译节点
@@ -389,9 +370,16 @@ function isInlineElement(node: any, tag: string): boolean {
 // 查找可翻译的父节点
 export function findTranslatableParent(node: any): any {
     // 1. 递归调用 grabNode 查找父节点是否可翻译
-    // 2. 若父节点不可翻译，则返回当前节点
-    // console.log('当前父节点', node.parentNode);
+    // 2. 返回最后允许翻译的节点。若所有父节点不可翻译，返回最后允许翻译的节点。
+    // console.log('当前父节点', node.parentNode, "|| 当前节点=",node);
     const parentResult = grabNode(node.parentNode);
+    // if (parentResult == false){
+    //     console.log("[debug] return false")
+    //     return false;
+    // }else{
+    //     console.log("[debug] return current parentResult")
+    //     return parentResult || node;
+    // }
     return parentResult || node;
 }
 
