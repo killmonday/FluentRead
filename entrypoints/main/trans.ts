@@ -407,14 +407,16 @@ function chromeTranslatorTranslatePage() {
             // console.log('[父节点属性skip]:', textNode.textContent);
             continue;
         } 
-        if (currentFatherNode.hasAttribute(TRANSLATED_ATTR)) {
-            // console.log('[已翻译skip]:', textNode.textContent);
-            continue
-        };
+        // if (currentFatherNode.hasAttribute(TRANSLATED_ATTR)) {
+        //     // console.log('[已翻译skip]:', textNode.textContent);
+        //     continue
+        // };
 
         // 获取当前节点的文本内容
         const textContent = textNode.textContent.trim();
         if (!textContent) continue;
+
+        if (textContent.length < 4) continue;
         
         // 检查目标语言是否与当前文本语言相同
         if (detectlang(textContent) === config.to) {
@@ -491,7 +493,7 @@ function chromeTranslatorTranslatePage() {
                 })
                 .catch((error: Error) => {
                     spinner.remove();
-                    if (currentFatherNode.tagName.toLowerCase() !== 'a' && currentFatherNode.tagName.toLowerCase() !== 'span' && textNode.textContent.length > 9){
+                    if (currentFatherNode.tagName.toLowerCase() !== 'a' && currentFatherNode.tagName.toLowerCase() !== 'span' && textNode.textContent.trim().length > 9){
                         insertFailedTip(currentFatherNode, error.toString() || "翻译失败", spinner);
                     }
                 });
