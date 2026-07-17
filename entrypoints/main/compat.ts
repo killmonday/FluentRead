@@ -606,7 +606,7 @@ function shouldSkipTwitterElement(node: any): boolean {
         // 用户名称相关
         'div[data-testid="User-Name"]',
         'div[data-testid="UserName"]',
-        'span[data-testid="tweetText"] span.r-bcqeeo',
+        //'span[data-testid="tweetText"] span.r-bcqeeo',
         // 用户ID和用户名相关
         'div[data-testid="HoverCard"]',
         'div[data-testid="UserCell"]',
@@ -615,7 +615,7 @@ function shouldSkipTwitterElement(node: any): boolean {
         'div[role="button"][data-testid="follow"]',
         'div[role="button"][data-testid="unfollow"]',
         // 包含"关注"文本的元素
-        'div[dir="auto"][id^="id__"]'
+        //'div[dir="auto"][id^="id__"]'
     ];
 
     // 检查当前节点是否匹配跳过选择器
@@ -684,7 +684,7 @@ function shouldSkipTwitterElement(node: any): boolean {
     }
     
     // 检查ID属性
-    if (node.id && node.id.startsWith('id__')) {
+    if (node.id && node.id.startsWith('id__') && node.dataset.testid !== "tweetText") {
         debugLog('Twitter', 'ID属性跳过', node.textContent);
         return true;
     }
