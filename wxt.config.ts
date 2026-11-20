@@ -21,6 +21,11 @@ export default defineConfig({
             'process.env.VUE_APP_VERSION': JSON.stringify(packageJson.version),
         }
     }),
+    zip: {
+        // package.json 的 name 是中文，默认模板会生成 "-0.0.28-chrome.zip" 这样的文件名
+        artifactTemplate: 'fluent-read-{{version}}-{{browser}}.zip',
+        sourcesTemplate: 'fluent-read-{{version}}-sources.zip',
+    },
     manifest: {
         permissions: ['storage', 'contextMenus', 'offscreen'],
     },

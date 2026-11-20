@@ -96,3 +96,7 @@ web-ext.config.ts
 *.sln
 *.sw?
 .continue/
+
+# Tracked release builds
+!release/
+!release/*.zip
