@@ -3,7 +3,7 @@ import { cache } from "../utils/cache";
 import { options, servicesType, services } from "../utils/option";
 import { insertFailedTip, insertLoadingSpinner } from "../utils/icon";
 import { styles } from "@/entrypoints/utils/constant";
-import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML, checkTextSize, isMainlyNumericContent, shouldSkipNode, findTranslatableParent, skipSet } from "@/entrypoints/main/dom";
+import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle, sanitizeHTML, checkTextSize, isMainlyNumericContent, shouldSkipNode, findTranslatableParent, skipSet, inlineSet } from "@/entrypoints/main/dom";
 import { detectlang, throttle } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn, selectCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
@@ -23,14 +23,60 @@ const TRANSLATED_ID_ATTR = 'data-fr-node-id'; // 添加节点ID属性
 
 let nodeIdCounter = 0; // 节点ID计数器
 
+// 正常链路中已入队的 Text 节点，用于复位 isAutoTranslating 后避免重复翻译
+let normalTranslatedTextNodes = new WeakSet<Text>();
+
+// ===== 暴力全文翻译（Brute-force full page translation）状态 =====
+
+const BRUTE_MAX_CHUNK = 3000; // 单次翻译的最大字符数
+const BRUTE_DEBOUNCE_MS = 400; // 动态内容防抖
+
+// 暴力模式下仍然跳过的标签（代码、媒体、表单、内联框架单独遍历）
+const BRUTE_SKIP_TAGS = new Set([
+    'script', 'style', 'noscript', 'template', 'textarea', 'input', 'select', 'option',
+    'code', 'pre', 'kbd', 'samp', 'var', 'svg', 'math', 'canvas', 'video', 'audio', 'img',
+    'object', 'embed', 'track', 'source', 'param', 'iframe'
+]);
+
+// 插件自身的 UI 与翻译产物，不能被暴力模式再次处理
+const BRUTE_EXTENSION_SELECTOR = [
+    '#fluent-read-floating-ball-container',
+    '#fluent-read-translation-status-container',
+    '#fluent-read-selection-translator-container',
+    '#fluent-new-api-container',
+    '.fluent-read-bilingual-content',
+    '.fluent-read-loading',
+    '.fluent-read-retry-wrapper',
+    '.fluent-read-failure',
+].join(',');
+
+let bruteForceActive = false;
+let bruteForceGeneration = 0; // 恢复后使在途响应失效
+let bruteQueuedCount = 0; // 本次暴力翻译入队的单元数
+let bruteObservers: MutationObserver[] = [];
+let bruteObservedTargets = new WeakSet<Node>();
+let brutePending = new Set<Node>();
+let bruteDebounceTimer: any = null;
+let bruteRoots = new Set<Document | ShadowRoot>(); // 主文档、shadow root、同源 iframe 文档
+let bruteIframeDocs = new WeakSet<Document>();
+let bruteIframeCleanups: Array<() => void> = [];
+let bruteMarkedElements = new Set<Element>(); // document.querySelectorAll 看不到 shadow/iframe
+let bruteMarkedIds = new Set<string>();
+let bruteProcessedTextNodes = new WeakSet<Text>();
+let bruteProcessedElements = new WeakSet<Element>();
+
 // 恢复原文内容
 export function restoreOriginalContent() {
     // 取消所有等待中的翻译任务
     cancelAllTranslations();
-    
-    // 1. 遍历所有已翻译的节点
+
+    // 停止暴力翻译观察器（原始 DOM 由 restoreBruteForceNodes 负责恢复）
+    stopBruteForce();
+
+    // 1. 遍历所有已翻译的节点（暴力翻译标记的节点交给 restoreBruteForceNodes 原样恢复）
     document.querySelectorAll(`[${TRANSLATED_ATTR}="true"]`).forEach(node => {
         const nodeId = node.getAttribute(TRANSLATED_ID_ATTR);
+        if (nodeId && bruteMarkedIds.has(nodeId)) return;
         if (nodeId && originalContents.has(nodeId)) {
             const originalContent = originalContents.get(nodeId);
             // 安全清理原始HTML，防止XSS攻击
@@ -38,26 +84,29 @@ export function restoreOriginalContent() {
             node.innerHTML = sanitizedContent;
             node.removeAttribute(TRANSLATED_ATTR);
             node.removeAttribute(TRANSLATED_ID_ATTR);
-            
+
             // 移除可能添加的翻译相关类
             node.classList.remove('fluent-read-bilingual');
         }
     });
-    
+
     // 2. 移除所有翻译内容元素
     document.querySelectorAll('.fluent-read-bilingual-content').forEach(element => {
         element.remove();
     });
-    
+
     // 3. 移除所有翻译过程中添加的加载动画和错误提示
     document.querySelectorAll('.fluent-read-loading, .fluent-read-retry-wrapper').forEach(element => {
         element.remove();
     });
-    
-    // 4. 清空存储的原始内容
+
+    // 4. 恢复 Shadow DOM / 同源 iframe 中的暴力翻译内容
+    restoreBruteForceNodes();
+
+    // 5. 清空存储的原始内容
     originalContents.clear();
-    
-    // 5. 停止所有观察器
+
+    // 6. 停止所有观察器
     if (observer) {
         observer.disconnect();
         observer = null;
@@ -66,16 +115,17 @@ export function restoreOriginalContent() {
         mutationObserver.disconnect();
         mutationObserver = null;
     }
-    
-    // 6. 重置所有翻译相关的状态
+
+    // 7. 重置所有翻译相关的状态
     isAutoTranslating = false;
     htmlSet.clear(); // 清空防抖集合
     nodeIdCounter = 0; // 重置节点ID计数器
-    
-    // 7. 消除可能存在的全局样式污染
+    normalTranslatedTextNodes = new WeakSet();
+
+    // 8. 消除可能存在的全局样式污染
     const tempStyleElements = document.querySelectorAll('style[data-fr-temp-style]');
     tempStyleElements.forEach(el => el.remove());
-    
+
     // 更新域名翻译状态为未翻译
     updateDomainTranslationState(false);
 }
@@ -157,9 +207,9 @@ export function autoTranslateEnglishPage() {
     });
 
     // 创建 MutationObserver 监听 DOM 变化
-    mutationObserver = new MutationObserver((mutations) => {
+    const mo = new MutationObserver((mutations) => {
         if (!isAutoTranslating) return;
-        
+
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
                 if (node.nodeType === 1) { // 元素节点
@@ -172,9 +222,10 @@ export function autoTranslateEnglishPage() {
             });
         });
     });
+    mutationObserver = mo;
 
     // 监听整个 body 的变化
-    mutationObserver.observe(document.body, {
+    mo.observe(document.body, {
         childList: true,
         subtree: true
     });
@@ -387,6 +438,15 @@ function chromeTranslatorTranslatePage() {
     isAutoTranslating = true;
     updateDomainTranslationState(true);
 
+    try {
+        chromeTranslatorScanPage();
+    } finally {
+        // 扫描是同步的，复位后再次触发全文翻译时才不会被永久锁死
+        isAutoTranslating = false;
+    }
+}
+
+function chromeTranslatorScanPage() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     const translatedNodes = new Set();
 
@@ -397,10 +457,16 @@ function chromeTranslatorTranslatePage() {
 
         // 跳过已翻译的文本节点
         if (translatedNodes.has(textNode)) continue;
+        // 跳过之前扫描中已入队的文本节点（避免复位后重复翻译）
+        if (normalTranslatedTextNodes.has(textNode)) continue;
         // 没有父节点的跳过
         if (!textNode.parentElement) continue
         
         let currentFatherNode = textNode.parentElement
+
+        // 已被暴力全文翻译标记的区域，避免正常链路重复翻译并覆盖原文记录
+        const bruteMarked = currentFatherNode.closest(`[${TRANSLATED_ATTR}="true"]`);
+        if (bruteMarked && bruteMarkedIds.has(bruteMarked.getAttribute(TRANSLATED_ID_ATTR) || '')) continue;
 
         // 检查父元素是否应该跳过
         if (currentFatherNode.classList?.contains('notranslate') || currentFatherNode.isContentEditable || skipSet.has(currentFatherNode.tagName?.toLowerCase()??'')){
@@ -460,6 +526,7 @@ function chromeTranslatorTranslatePage() {
 
         // 标记为已翻译
         translatedNodes.add(textNode);
+        normalTranslatedTextNodes.add(textNode);
         const nodeId = `fr-node-${nodeIdCounter++}`;
         currentFatherNode.setAttribute(TRANSLATED_ID_ATTR, nodeId);
         
@@ -479,6 +546,7 @@ function chromeTranslatorTranslatePage() {
                 })
                 .catch((error: Error) => {
                     spinner.remove();
+                    normalTranslatedTextNodes.delete(textNode);
                     // console.log('[translate error]:', textNode.textContent, error.toString() || "翻译失败");
                     insertFailedTip(currentFatherNode, error.toString() || "翻译失败", spinner);
                 });
@@ -493,6 +561,7 @@ function chromeTranslatorTranslatePage() {
                 })
                 .catch((error: Error) => {
                     spinner.remove();
+                    normalTranslatedTextNodes.delete(textNode);
                     if (currentFatherNode.tagName.toLowerCase() !== 'a' && currentFatherNode.tagName.toLowerCase() !== 'span' && textNode.textContent.trim().length > 9){
                         insertFailedTip(currentFatherNode, error.toString() || "翻译失败", spinner);
                     }
@@ -504,7 +573,11 @@ function chromeTranslatorTranslatePage() {
 export function resetTranslationState(): void {
     // 取消所有等待中的翻译任务
     cancelAllTranslations();
-    
+
+    // 停止暴力翻译观察器，并恢复其翻译过的内容（路由切换后视图通常已重建）
+    stopBruteForce();
+    restoreBruteForceNodes();
+
     // 停止所有观察器
     if (observer) {
         observer.disconnect();
@@ -514,16 +587,597 @@ export function resetTranslationState(): void {
         mutationObserver.disconnect();
         mutationObserver = null;
     }
-    
+
     // 重置所有翻译相关的状态
     isAutoTranslating = false;
     htmlSet.clear(); // 清空防抖集合
     originalContents.clear(); // 清空原始内容存储
     nodeIdCounter = 0; // 重置节点ID计数器
-    
+    normalTranslatedTextNodes = new WeakSet();
+
     // 移除可能存在的全局样式污染
     const tempStyleElements = document.querySelectorAll('style[data-fr-temp-style]');
     tempStyleElements.forEach(el => el.remove());
-    
+
     // 注意：不更新域名翻译状态，因为域名翻译状态应保持不变
+}
+
+// ==================== 暴力全文翻译 ====================
+// 独立于正常翻译链路：不经过站点适配、文本长度/数字/用户名等启发式过滤，
+// 直接翻译页面上所有可见文本，并持续跟进动态内容。
+
+const BRUTE_SKIP_SELECTOR = Array.from(BRUTE_SKIP_TAGS).join(',');
+
+/**
+ * 暴力全文翻译入口
+ * 已激活时只做增量扫描（可重复点击）
+ */
+export function bruteForceTranslatePage(): { started: boolean; count: number; reason?: 'disabled' | 'not-ready' } {
+    if (!config.on) return { started: false, count: 0, reason: 'disabled' };
+    if (!document.body) return { started: false, count: 0, reason: 'not-ready' };
+
+    const alreadyActive = bruteForceActive;
+    if (!alreadyActive) {
+        bruteForceActive = true;
+        bruteForceGeneration++;
+        updateDomainTranslationState(true);
+        document.dispatchEvent(new CustomEvent('fluentread-translation-started'));
+    }
+
+    const startCount = bruteQueuedCount;
+    collectBruteRoot(document);
+    if (!alreadyActive) observeBruteRoot(document.body);
+    if (alreadyActive) scheduleBruteFlush();
+
+    return { started: true, count: Math.max(0, bruteQueuedCount - startCount) };
+}
+
+// 收集指定根节点下的全部内容（Document 或 open shadow root）
+function collectBruteRoot(root: Document | ShadowRoot): void {
+    bruteRoots.add(root);
+    if (root.nodeType === Node.DOCUMENT_NODE) {
+        const body = (root as Document).body;
+        if (body) walkBrute(body);
+        return;
+    }
+
+    (root as ShadowRoot).childNodes.forEach(child => {
+        if (child.nodeType === Node.ELEMENT_NODE) {
+            walkBrute(child as Element);
+        } else if (child.nodeType === Node.TEXT_NODE) {
+            handleBruteTextNode(child as Text);
+        }
+    });
+}
+
+// 递归遍历元素树
+function walkBrute(el: Element): void {
+    if (!bruteForceActive || !el.isConnected) return;
+
+    // iframe 自身不翻译，但同源 iframe 的文档另外遍历（需在排除判断前处理）
+    if (el.tagName.toLowerCase() === 'iframe') {
+        attachSameOriginIframe(el as HTMLIFrameElement);
+        return;
+    }
+
+    if (isExcludedElement(el) || !isElementVisible(el)) return;
+
+    // shadow DOM 是独立树，先处理
+    if (el.shadowRoot) {
+        observeBruteRoot(el.shadowRoot);
+        collectBruteRoot(el.shadowRoot);
+    }
+
+    if (config.display === styles.bilingualTranslation) {
+        const directTexts = getDirectTextNodes(el);
+        // 纯内联子树作为一个双语单元整体翻译，保留链接等结构
+        if (directTexts.length > 0 && isPureInlineSubtree(el)) {
+            enqueueBilingualUnit(el, el.textContent || '');
+            return;
+        }
+        // 混合内容：只翻译本元素直属文本，再递归子元素
+        directTexts.forEach(textNode => enqueueDynamicBilingualText(textNode));
+        el.childNodes.forEach(child => {
+            if (child.nodeType === Node.ELEMENT_NODE) walkBrute(child as Element);
+        });
+        return;
+    }
+
+    // 仅译文模式
+    if (el.childElementCount === 0) {
+        const texts = getDirectTextNodes(el);
+        if (texts.length === 1) {
+            enqueueSingleTextUnit(texts[0]);
+        } else if (texts.length > 1) {
+            enqueueSingleBlockUnit(el, texts);
+        }
+    } else {
+        // 有子元素时逐个翻译直属文本节点，保留 <a>/<b>/<span> 等结构
+        getDirectTextNodes(el).forEach(textNode => enqueueSingleTextUnit(textNode));
+    }
+
+    el.childNodes.forEach(child => {
+        if (child.nodeType === Node.ELEMENT_NODE) walkBrute(child as Element);
+    });
+}
+
+// 处理 shadow root 直属的文本节点
+function handleBruteTextNode(textNode: Text): void {
+    if (config.display === styles.bilingualTranslation) {
+        enqueueDynamicBilingualText(textNode);
+    } else {
+        enqueueSingleTextUnit(textNode);
+    }
+}
+
+// 直属文本节点（忽略纯空白）
+function getDirectTextNodes(el: Element): Text[] {
+    const nodes: Text[] = [];
+    el.childNodes.forEach(child => {
+        if (child.nodeType === Node.TEXT_NODE && (child as Text).textContent?.trim()) {
+            nodes.push(child as Text);
+        }
+    });
+    return nodes;
+}
+
+// 插件自身 UI、翻译产物、字面禁止翻译的节点
+function isExcludedElement(el: Element): boolean {
+    if (BRUTE_SKIP_TAGS.has(el.tagName.toLowerCase())) return true;
+    if ((el as HTMLElement).isContentEditable) return true;
+    if (el.closest(BRUTE_EXTENSION_SELECTOR)) return true;
+    if (el.closest('[contenteditable]:not([contenteditable="false"])')) return true;
+    if (el.closest('[translate="no"], .notranslate, [aria-hidden="true"]')) return true;
+    // 祖先为代码/媒体/表单等标签时也跳过
+    if (el.closest(BRUTE_SKIP_SELECTOR)) return true;
+    return false;
+}
+
+// 是否对用户可见（display:none / visibility:hidden / 无布局盒）
+function isElementVisible(el: Element): boolean {
+    if (!el.isConnected) return false;
+    const view = el.ownerDocument?.defaultView || window;
+    const style = view.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+        return false;
+    }
+    if (style.display === 'contents') return true;
+    const anyEl = el as any;
+    if (typeof anyEl.checkVisibility === 'function') {
+        try {
+            if (!anyEl.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })) return false;
+        } catch (e) {
+            // 旧浏览器忽略参数错误
+        }
+    }
+    return el.getClientRects().length > 0;
+}
+
+// 是否内联元素（决定双语模式能否整块翻译）
+function isInlineLike(el: Element): boolean {
+    if (inlineSet.has(el.tagName.toLowerCase())) return true;
+    try {
+        const view = el.ownerDocument?.defaultView || window;
+        const display = view.getComputedStyle(el).display;
+        return display.startsWith('inline') || display === 'contents' || display === 'ruby';
+    } catch (e) {
+        return false;
+    }
+}
+
+function isPureInlineSubtree(el: Element): boolean {
+    for (const child of Array.from(el.children)) {
+        if (!isElementVisible(child) || isExcludedElement(child) || !isInlineLike(child)) return false;
+        if (!isPureInlineSubtree(child)) return false;
+    }
+    return true;
+}
+
+function normalizeBruteText(text: string): string {
+    return text.replace(/[\s 　]+/g, ' ').trim();
+}
+
+// 是否有可翻译内容：至少 2 个字符、包含字母、且不是目标语言
+function isTranslatableSource(source: string): boolean {
+    const normalized = normalizeBruteText(source);
+    if (normalized.length < 2) return false;
+    if (!/\p{L}/u.test(normalized)) return false;
+    if (detectlang(normalized.replace(/[\s　]/g, '')) === config.to) return false;
+    return true;
+}
+
+// 站点或正常链路已翻译、而暴力模式未标记的区域
+function hasForeignTranslatedAncestor(el: Element): boolean {
+    const marked = el.closest(`[${TRANSLATED_ATTR}="true"]`);
+    return !!marked && !bruteMarkedElements.has(marked);
+}
+
+// 在修改 DOM 前保存原文并打标记
+function markBruteForceElement(el: Element): string {
+    const existingId = el.getAttribute(TRANSLATED_ID_ATTR);
+    if (existingId && el.getAttribute(TRANSLATED_ATTR) === 'true') {
+        return existingId;
+    }
+    const id = `fr-node-${nodeIdCounter++}`;
+    originalContents.set(id, el.innerHTML);
+    el.setAttribute(TRANSLATED_ID_ATTR, id);
+    el.setAttribute(TRANSLATED_ATTR, 'true');
+    bruteMarkedElements.add(el);
+    bruteMarkedIds.add(id);
+    return id;
+}
+
+function unmarkBruteForceElement(el: Element): void {
+    const id = el.getAttribute(TRANSLATED_ID_ATTR);
+    if (!id || !bruteMarkedIds.has(id)) return;
+    originalContents.delete(id);
+    bruteMarkedIds.delete(id);
+    bruteMarkedElements.delete(el);
+    el.removeAttribute(TRANSLATED_ATTR);
+    el.removeAttribute(TRANSLATED_ID_ATTR);
+    el.classList.remove('fluent-read-bilingual');
+}
+
+function isBruteCurrent(generation: number): boolean {
+    return bruteForceActive && generation === bruteForceGeneration;
+}
+
+function preserveEdgeWhitespace(original: string, translated: string): string {
+    const leading = original.match(/^\s*/)?.[0] || '';
+    const trailing = original.match(/\s*$/)?.[0] || '';
+    return leading + translated.trim() + trailing;
+}
+
+// ===== 长文本分块 =====
+
+function chunkBruteText(text: string, max: number = BRUTE_MAX_CHUNK): string[] {
+    if (text.length <= max) return [text];
+    const chunks: string[] = [];
+    let rest = text;
+    while (rest.length > max) {
+        let cut = -1;
+        // 从上限向前找句末标点
+        for (let i = max; i > Math.floor(max * 0.5); i--) {
+            if (/[.!?。！？;；\n]/.test(rest[i])) {
+                cut = i + 1;
+                break;
+            }
+        }
+        if (cut === -1) {
+            const space = rest.lastIndexOf(' ', max);
+            cut = space > 0 ? space + 1 : max;
+        }
+        chunks.push(rest.slice(0, cut));
+        rest = rest.slice(cut);
+    }
+    if (rest.trim()) chunks.push(rest);
+    return chunks.filter(chunk => chunk.trim());
+}
+
+async function translateLongText(text: string): Promise<string> {
+    if (text.length <= BRUTE_MAX_CHUNK) {
+        return translateText(text, document.title);
+    }
+    const chunks = chunkBruteText(text);
+    const results: string[] = [];
+    for (const chunk of chunks) {
+        results.push(await translateText(chunk, document.title));
+    }
+    return results.join(' ');
+}
+
+// ===== 翻译单元 =====
+
+// 仅译文模式：翻译单个 Text 节点（原地修改 nodeValue，避免触发观察器循环）
+function enqueueSingleTextUnit(textNode: Text): void {
+    if (!bruteForceActive) return;
+    if (bruteProcessedTextNodes.has(textNode)) return;
+    const host = textNode.parentElement;
+    if (!host || host.tagName === 'BODY' || host.tagName === 'HTML') return;
+    if (isExcludedElement(host) || !isElementVisible(host)) return;
+    if (hasForeignTranslatedAncestor(host)) return;
+
+    const original = textNode.textContent || '';
+    const source = normalizeBruteText(original);
+    if (!isTranslatableSource(source)) {
+        bruteProcessedTextNodes.add(textNode);
+        return;
+    }
+
+    bruteProcessedTextNodes.add(textNode);
+    const generation = bruteForceGeneration;
+    markBruteForceElement(host);
+    bruteQueuedCount++;
+
+    translateLongText(source)
+        .then(translated => {
+            if (!isBruteCurrent(generation)) return;
+            if (!textNode.isConnected) return;
+            // 请求期间网站修改了内容，按新内容重新处理
+            if (textNode.textContent !== original) {
+                bruteProcessedTextNodes.delete(textNode);
+                enqueueSingleTextUnit(textNode);
+                return;
+            }
+            if (!translated || normalizeBruteText(translated) === source) return;
+            textNode.nodeValue = preserveEdgeWhitespace(original, translated);
+        })
+        .catch(error => {
+            bruteProcessedTextNodes.delete(textNode);
+            console.error('[FluentRead][暴力翻译] 翻译失败:', error);
+        });
+}
+
+// 仅译文模式：同一元素内多个纯文本节点合并为一个翻译单元
+function enqueueSingleBlockUnit(host: Element, textNodes: Text[]): void {
+    if (!bruteForceActive) return;
+    if (isExcludedElement(host) || !isElementVisible(host)) return;
+    if (hasForeignTranslatedAncestor(host)) return;
+
+    const pending = textNodes.filter(textNode => !bruteProcessedTextNodes.has(textNode));
+    if (!pending.length) return;
+
+    const original = pending.map(textNode => textNode.textContent || '').join('');
+    const source = normalizeBruteText(original);
+    if (!isTranslatableSource(source)) {
+        pending.forEach(textNode => bruteProcessedTextNodes.add(textNode));
+        return;
+    }
+
+    const generation = bruteForceGeneration;
+    pending.forEach(textNode => bruteProcessedTextNodes.add(textNode));
+    markBruteForceElement(host);
+    bruteQueuedCount++;
+
+    translateLongText(source)
+        .then(translated => {
+            if (!isBruteCurrent(generation)) return;
+            if (!translated || normalizeBruteText(translated) === source) return;
+            const connected = pending.filter(textNode => textNode.isConnected);
+            if (!connected.length) return;
+            // 译文写入第一个文本节点，清空其余文本节点
+            connected[0].nodeValue = preserveEdgeWhitespace(connected[0].textContent || '', translated);
+            for (let i = 1; i < connected.length; i++) {
+                if (connected[i].textContent?.trim()) connected[i].nodeValue = '';
+            }
+        })
+        .catch(error => {
+            pending.forEach(textNode => bruteProcessedTextNodes.delete(textNode));
+            console.error('[FluentRead][暴力翻译] 翻译失败:', error);
+        });
+}
+
+// 双语模式：整块翻译（纯内联子树的块元素）
+function enqueueBilingualUnit(host: Element, source: string): void {
+    if (!bruteForceActive) return;
+    if (bruteProcessedElements.has(host)) return;
+    if (hasForeignTranslatedAncestor(host)) return;
+
+    const normalized = normalizeBruteText(source);
+    if (!isTranslatableSource(normalized)) {
+        bruteProcessedElements.add(host);
+        return;
+    }
+
+    bruteProcessedElements.add(host);
+    const generation = bruteForceGeneration;
+    const hadMark = host.hasAttribute(TRANSLATED_ATTR);
+    markBruteForceElement(host);
+    bruteQueuedCount++;
+
+    translateLongText(normalized)
+        .then(translated => {
+            if (!isBruteCurrent(generation)) return;
+            if (!translated || normalizeBruteText(translated) === normalized) {
+                if (!hadMark) unmarkBruteForceElement(host);
+                return;
+            }
+            if (!host.isConnected) return;
+            bilingualAppendChild(host, translated);
+        })
+        .catch(error => {
+            bruteProcessedElements.delete(host);
+            if (!hadMark) unmarkBruteForceElement(host);
+            console.error('[FluentRead][暴力翻译] 翻译失败:', error);
+        });
+}
+
+// 双语模式：混合内容中的单个文本节点（也用于动态新增文本）
+function enqueueDynamicBilingualText(textNode: Text): void {
+    if (!bruteForceActive) return;
+    if (bruteProcessedTextNodes.has(textNode)) return;
+    const host = textNode.parentElement;
+    if (!host || host.tagName === 'BODY' || host.tagName === 'HTML') return;
+    if (isExcludedElement(host) || !isElementVisible(host)) return;
+    if (hasForeignTranslatedAncestor(host)) return;
+
+    const original = textNode.textContent || '';
+    const source = normalizeBruteText(original);
+    if (!isTranslatableSource(source)) {
+        bruteProcessedTextNodes.add(textNode);
+        return;
+    }
+
+    bruteProcessedTextNodes.add(textNode);
+    const generation = bruteForceGeneration;
+    markBruteForceElement(host);
+    bruteQueuedCount++;
+
+    translateLongText(source)
+        .then(translated => {
+            if (!isBruteCurrent(generation)) return;
+            if (!host.isConnected) return;
+            if (!translated || normalizeBruteText(translated) === source) return;
+            bilingualAppendChild(host, translated);
+        })
+        .catch(error => {
+            bruteProcessedTextNodes.delete(textNode);
+            console.error('[FluentRead][暴力翻译] 翻译失败:', error);
+        });
+}
+
+// ===== 动态内容观察 =====
+
+function observeBruteRoot(root: Node): void {
+    if (!root || bruteObservedTargets.has(root)) return;
+    bruteObservedTargets.add(root);
+
+    const doc = root.nodeType === Node.DOCUMENT_NODE
+        ? root as Document
+        : (root as ShadowRoot).ownerDocument;
+    const MO = (doc?.defaultView || window).MutationObserver;
+    if (!MO) return;
+
+    const observerInstance = new MO((records: MutationRecord[]) => {
+        if (!bruteForceActive) return;
+        records.forEach(record => {
+            if (record.type === 'characterData') {
+                const target = record.target;
+                if (target.nodeType === Node.TEXT_NODE && !bruteProcessedTextNodes.has(target as Text)) {
+                    brutePending.add(target);
+                }
+            } else if (record.type === 'childList') {
+                record.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        const el = node as Element;
+                        if (el.matches(BRUTE_EXTENSION_SELECTOR) || el.closest(BRUTE_EXTENSION_SELECTOR)) return;
+                        brutePending.add(node);
+                    } else if (node.nodeType === Node.TEXT_NODE && !bruteProcessedTextNodes.has(node as Text)) {
+                        brutePending.add(node);
+                    }
+                });
+            }
+        });
+        scheduleBruteFlush();
+    });
+
+    observerInstance.observe(root, { childList: true, subtree: true, characterData: true });
+    bruteObservers.push(observerInstance);
+}
+
+function scheduleBruteFlush(): void {
+    if (!bruteForceActive) return;
+    if (bruteDebounceTimer) clearTimeout(bruteDebounceTimer);
+    bruteDebounceTimer = setTimeout(flushBrutePending, BRUTE_DEBOUNCE_MS);
+}
+
+function flushBrutePending(): void {
+    bruteDebounceTimer = null;
+    if (!bruteForceActive) {
+        brutePending.clear();
+        return;
+    }
+
+    const nodes = Array.from(brutePending);
+    brutePending.clear();
+    nodes.forEach(node => {
+        if (!node.isConnected) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+            handleBruteTextNode(node as Text);
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            walkBrute(node as Element);
+        }
+    });
+}
+
+// ===== 同源 iframe =====
+
+function attachSameOriginIframe(iframe: HTMLIFrameElement): void {
+    let doc: Document | null = null;
+    try {
+        doc = iframe.contentDocument;
+    } catch (e) {
+        doc = null;
+    }
+    if (!doc) return; // 跨域 iframe 无法访问
+    if (bruteIframeDocs.has(doc)) return;
+    bruteIframeDocs.add(doc);
+
+    const onLoad = () => {
+        if (!bruteForceActive) return;
+        collectIframeDocument(iframe);
+    };
+    iframe.addEventListener('load', onLoad);
+    bruteIframeCleanups.push(() => iframe.removeEventListener('load', onLoad));
+
+    collectIframeDocument(iframe);
+}
+
+function collectIframeDocument(iframe: HTMLIFrameElement): void {
+    let doc: Document | null = null;
+    try {
+        doc = iframe.contentDocument;
+    } catch (e) {
+        doc = null;
+    }
+    if (!doc || !doc.body) return;
+    bruteIframeDocs.add(doc);
+    collectBruteRoot(doc);
+    observeBruteRoot(doc.body);
+}
+
+// ===== 停止与恢复 =====
+
+function stopBruteForce(): void {
+    bruteForceActive = false;
+    bruteForceGeneration++;
+    if (bruteDebounceTimer) {
+        clearTimeout(bruteDebounceTimer);
+        bruteDebounceTimer = null;
+    }
+    bruteObservers.forEach(observerInstance => observerInstance.disconnect());
+    bruteObservers = [];
+    bruteIframeCleanups.forEach(cleanup => cleanup());
+    bruteIframeCleanups = [];
+    bruteObservedTargets = new WeakSet();
+    bruteIframeDocs = new WeakSet();
+    brutePending.clear();
+    bruteQueuedCount = 0;
+    // 注意：bruteRoots / 标记注册表保留，由 restoreBruteForceNodes 负责清理
+}
+
+function restoreBruteForceNodes(): void {
+    const restored = new Set<string>();
+
+    const restoreElement = (el: Element) => {
+        const id = el.getAttribute(TRANSLATED_ID_ATTR);
+        if (id && !restored.has(id)) {
+            const original = originalContents.get(id);
+            if (original != null) {
+                try {
+                    // 暴力模式的原文来自站点自身 DOM，直接回写以避免白名单压平自定义元素/SVG
+                    el.innerHTML = bruteMarkedIds.has(id) ? original : sanitizeHTML(original);
+                } catch (error) {
+                    console.error('[FluentRead][暴力翻译] 恢复原文失败:', error);
+                }
+                restored.add(id);
+            }
+        }
+        el.removeAttribute(TRANSLATED_ATTR);
+        el.removeAttribute(TRANSLATED_ID_ATTR);
+        el.classList.remove('fluent-read-bilingual');
+    };
+
+    // 只恢复暴力模式自己标记的节点；正常链路节点由 restoreOriginalContent 处理
+    // （主文档的已在前面处理，Shadow DOM / 同源 iframe 中的只能从这里恢复）
+    bruteMarkedElements.forEach(restoreElement);
+
+    const removeArtifacts = (root: Document | ShadowRoot) => {
+        root.querySelectorAll('.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper')
+            .forEach(el => el.remove());
+    };
+    removeArtifacts(document);
+    bruteRoots.forEach(root => {
+        try {
+            removeArtifacts(root);
+        } catch (e) {
+            // 已卸载的 iframe 文档，忽略
+        }
+    });
+
+    bruteMarkedElements.clear();
+    bruteMarkedIds.clear();
+    bruteRoots.clear();
+    bruteProcessedTextNodes = new WeakSet();
+    bruteProcessedElements = new WeakSet();
 }

@@ -1,4 +1,24 @@
 <template>
+  <!-- 暴力全文翻译 -->
+  <el-row class="margin-bottom margin-left-2em brute-force-row">
+    <el-col :span="16" class="brute-force-main">
+      <el-tooltip class="box-item" effect="dark"
+                  content="忽略网站适配规则与过滤条件，翻译当前页面所有可见文本（支持动态加载内容、Shadow DOM 和同源 iframe）"
+                  placement="top-start" :show-after="500">
+        <el-button type="primary" :loading="bruteForceLoading" :disabled="!config.on"
+                   style="width: 100%" @click="handleBruteForceTranslate">
+          暴力全文翻译
+        </el-button>
+      </el-tooltip>
+    </el-col>
+    <el-col :span="8" class="brute-force-restore">
+      <el-button type="info" plain :disabled="!config.on"
+                 style="width: 100%" @click="handleRestoreOriginal">
+        恢复原文
+      </el-button>
+    </el-col>
+  </el-row>
+
   <!-- 开关 -->
   <el-row class="margin-bottom margin-left-2em">
     <el-col :span="20" class="lightblue rounded-corner">
@@ -896,6 +916,59 @@ const handlePluginStateChange = (val: boolean) => {
   }
 };
 
+// 暴力全文翻译相关
+const bruteForceLoading = ref(false);
+
+const handleBruteForceTranslate = async () => {
+  if (!config.value.on) {
+    ElMessage.warning('请先开启插件');
+    return;
+  }
+
+  bruteForceLoading.value = true;
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    if (!tab?.id) {
+      ElMessage.error('未找到当前标签页');
+      return;
+    }
+
+    const response: any = await browser.tabs.sendMessage(tab.id, { type: 'bruteForceTranslate' });
+    if (response?.status === 'success') {
+      ElMessage.success(response.count ? `已开始暴力翻译（${response.count} 处文本）` : '已开始暴力翻译');
+      setTimeout(() => window.close(), 800);
+    } else if (response?.status === 'disabled') {
+      ElMessage.warning('插件未启用，请先开启插件');
+    } else if (response?.status === 'config-error') {
+      ElMessage.warning('翻译服务配置不完整，请先完成配置');
+    } else {
+      ElMessage.error('当前页面暂时无法开始翻译');
+    }
+  } catch (error) {
+    ElMessage.error('当前页面不支持翻译（可能是浏览器内置页面，或内容脚本未注入）');
+  } finally {
+    bruteForceLoading.value = false;
+  }
+};
+
+const handleRestoreOriginal = async () => {
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    if (!tab?.id) {
+      ElMessage.error('未找到当前标签页');
+      return;
+    }
+
+    await browser.tabs.sendMessage(tab.id, { type: 'bruteForceRestore' });
+    ElMessage.success('已恢复原文');
+    setTimeout(() => window.close(), 800);
+  } catch (error) {
+    ElMessage.error('当前页面无法恢复原文（内容脚本未注入）');
+  }
+};
+
 // 处理悬浮球开关变化
 const toggleFloatingBall = (val: boolean) => {
   // 向所有激活的标签页发送消息
@@ -1333,6 +1406,20 @@ const validateConfig = (configData: any): boolean => {
 .flex-end {
   display: flex;
   justify-content: flex-end;
+}
+
+.brute-force-row {
+  margin-top: 0.25em;
+}
+
+.brute-force-main {
+  padding-right: 6px;
+  box-sizing: border-box;
+}
+
+.brute-force-restore {
+  padding-left: 6px;
+  box-sizing: border-box;
 }
 
 .select-divider {

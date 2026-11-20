@@ -1,4 +1,5 @@
-import { handleMousePointTranslation, autoTranslateEnglishPage, restoreOriginalContent, resetTranslationState } from "./main/trans";
+import { handleMousePointTranslation, autoTranslateEnglishPage, restoreOriginalContent, resetTranslationState, bruteForceTranslatePage } from "./main/trans";
+import { checkConfig } from "./utils/check";
 import { cache } from "./utils/cache";
 import { constants } from "@/entrypoints/utils/constant";
 import { getCenterPoint } from "@/entrypoints/utils/common";
@@ -72,9 +73,13 @@ export default defineContentScript({
 
         // background.ts
         browser.runtime.onMessage.addListener((message: { message: string; }, sender: any, sendResponse: () => void) => {
-            if (message.message === 'clearCache') cache.clean()
-            sendResponse();
-            return true;
+            if (message?.message === 'clearCache') {
+                cache.clean();
+                sendResponse();
+                return true;
+            }
+            // 不匹配的消息交给后续监听器处理，避免抢先响应导致其他消息拿到 undefined
+            return false;
         });
         
         // 处理悬浮球控制消息
@@ -135,6 +140,46 @@ export default defineContentScript({
             return false;
         });
         
+        // 处理 popup 触发的暴力全文翻译 / 恢复原文
+        browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response?: any) => void) => {
+            if (message.type === 'bruteForceTranslate') {
+                if (config.on === false) {
+                    sendResponse({ status: 'disabled' });
+                    return true;
+                }
+                if (!checkConfig()) {
+                    sendResponse({ status: 'config-error' });
+                    return true;
+                }
+                try {
+                    const result = bruteForceTranslatePage();
+                    sendResponse({
+                        status: result.started ? 'success' : 'failed',
+                        count: result.count,
+                        reason: result.reason
+                    });
+                } catch (error) {
+                    console.error('[FluentRead] 暴力全文翻译启动失败:', error);
+                    sendResponse({ status: 'failed' });
+                }
+                return true;
+            }
+
+            if (message.type === 'bruteForceRestore') {
+                try {
+                    restoreOriginalContent();
+                    document.dispatchEvent(new CustomEvent('fluentread-translation-ended'));
+                    sendResponse({ status: 'success' });
+                } catch (error) {
+                    console.error('[FluentRead] 恢复原文失败:', error);
+                    sendResponse({ status: 'failed' });
+                }
+                return true;
+            }
+
+            return false;
+        });
+
         // 在页面卸载时清理资源
         window.addEventListener('beforeunload', () => {
             // 取消所有待处理的翻译任务
